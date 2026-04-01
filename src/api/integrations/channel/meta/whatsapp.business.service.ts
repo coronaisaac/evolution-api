@@ -660,6 +660,11 @@ export class BusinessStartupService extends ChannelStartupService {
           };
         }
 
+        // Propagate Click-to-WhatsApp (CTWA) referral data from Meta ads/campaigns
+        if (received.messages?.[0]?.referral) {
+          messageRaw.referral = received.messages[0].referral;
+        }
+
         if (this.localSettings.readMessages) {
           // await this.client.readMessages([received.key]);
         }
