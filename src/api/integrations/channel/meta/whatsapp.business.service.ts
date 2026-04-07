@@ -697,8 +697,17 @@ export class BusinessStartupService extends ChannelStartupService {
         }
 
         if (!this.isMediaMessage(message) && message.type !== 'sticker') {
+          const dbData = { ...messageRaw };
+          if (dbData.referral) {
+            dbData.contextInfo = {
+              ...(dbData.contextInfo || {}),
+              referral: dbData.referral,
+            };
+            delete dbData.referral;
+          }
+
           await this.prismaRepository.message.create({
-            data: messageRaw,
+            data: dbData,
           });
         }
 
