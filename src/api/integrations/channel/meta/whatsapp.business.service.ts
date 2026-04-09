@@ -556,18 +556,18 @@ export class BusinessStartupService extends ChannelStartupService {
               this.logger.error(['Error on upload file to minio', error?.message, error?.stack]);
             }
           } else {
-            if (this.localWebhook.enabled && this.localWebhook.webhookBase64) {
+            try {
               const buffer = await this.downloadMediaMessage(received?.messages[0]);
-              messageRaw.message.base64 = buffer.toString('base64');
+              if (buffer) {
+                messageRaw.message.base64 = buffer.toString('base64');
+              }
+            } catch (error) {
+              this.logger.error(['Error downloading media for base64 fallback', error?.message]);
             }
 
             // Processar OpenAI speech-to-text para áudio mesmo sem S3
             if (this.configService.get<Openai>('OPENAI').ENABLED && message.type === 'audio') {
               let openAiBase64 = messageRaw.message.base64;
-              if (!openAiBase64) {
-                const buffer = await this.downloadMediaMessage(received?.messages[0]);
-                openAiBase64 = buffer.toString('base64');
-              }
 
               const openAiDefaultSettings = await this.prismaRepository.openaiSetting.findFirst({
                 where: {
@@ -696,7 +696,7 @@ export class BusinessStartupService extends ChannelStartupService {
           }
         }
 
-        if (!this.isMediaMessage(message) && message.type !== 'sticker') {
+        if (!this.isMediaMessage(message) || !this.configService.get<S3>('S3').ENABLE || message.type === 'sticker') {
           const dbData = { ...messageRaw };
           if (dbData.referral) {
             dbData.contextInfo = {
