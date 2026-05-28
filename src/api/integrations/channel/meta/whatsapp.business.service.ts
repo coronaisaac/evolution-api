@@ -384,6 +384,7 @@ export class BusinessStartupService extends ChannelStartupService {
 
   protected async messageHandle(received: any, database: Database, settings: any) {
     try {
+      let messageSavedToDb = false;
       let messageRaw: any;
       let pushName: any;
 
@@ -502,6 +503,7 @@ export class BusinessStartupService extends ChannelStartupService {
                 const createdMessage = await this.prismaRepository.message.create({
                   data: messageRaw,
                 });
+                messageSavedToDb = true;
 
                 await this.prismaRepository.media.create({
                   data: {
@@ -516,9 +518,7 @@ export class BusinessStartupService extends ChannelStartupService {
                 const mediaUrl = await s3Service.getObjectUrl(fullName);
 
                 messageRaw.message.mediaUrl = mediaUrl;
-                if (this.localWebhook.enabled && this.localWebhook.webhookBase64) {
-                  messageRaw.message.base64 = buffer.data.toString('base64');
-                }
+                messageRaw.message.base64 = buffer.data.toString('base64');
 
                 // Processar OpenAI speech-to-text para áudio após o mediaUrl estar disponível
                 if (this.configService.get<Openai>('OPENAI').ENABLED && mediaType === 'audio') {
@@ -696,7 +696,7 @@ export class BusinessStartupService extends ChannelStartupService {
           }
         }
 
-        if (!this.isMediaMessage(message) || !this.configService.get<S3>('S3').ENABLE || message.type === 'sticker') {
+        if (!messageSavedToDb) {
           const dbData = { ...messageRaw };
           if (dbData.referral) {
             dbData.contextInfo = {
