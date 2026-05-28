@@ -142,22 +142,27 @@ export class BusinessStartupService extends ChannelStartupService {
 
   private async downloadMediaMessage(message: any) {
     try {
-      const id = message[message.type].id;
-      let urlServer = this.configService.get<WaBusiness>('WA_BUSINESS').URL;
-      const version = this.configService.get<WaBusiness>('WA_BUSINESS').VERSION;
-      urlServer = `${urlServer}/${version}/${id}`;
-      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` };
-
-      // Primeiro, obtenha a URL do arquivo
-      let result = await axios.get(urlServer, { headers });
+      const id = message[message.type]?.id;
+      let mediaUrl = message[message.type]?.url;
+      
+      if (!mediaUrl) {
+        let urlServer = this.configService.get<WaBusiness>('WA_BUSINESS').URL;
+        const version = this.configService.get<WaBusiness>('WA_BUSINESS').VERSION;
+        urlServer = `${urlServer}/${version}/${id}`;
+        const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` };
+  
+        // Primeiro, obtenha a URL do arquivo
+        const result = await axios.get(urlServer, { headers });
+        mediaUrl = result.data.url;
+      }
 
       // Depois, baixe o arquivo usando a URL retornada
-      result = await axios.get(result.data.url, {
+      const bufferResult = await axios.get(mediaUrl, {
         headers: { Authorization: `Bearer ${this.token}` }, // Use apenas o token de autorização para download
         responseType: 'arraybuffer',
       });
 
-      return result.data;
+      return bufferResult.data;
     } catch (e) {
       this.logger.error(`Error downloading media: ${e}`);
       throw e;
@@ -437,14 +442,19 @@ export class BusinessStartupService extends ChannelStartupService {
               if (!hasRealMedia) {
                 this.logger.warn('Message detected as media but contains no valid media content');
               } else {
-                const id = message.messages[0][message.messages[0].type].id;
-                let urlServer = this.configService.get<WaBusiness>('WA_BUSINESS').URL;
-                const version = this.configService.get<WaBusiness>('WA_BUSINESS').VERSION;
-                urlServer = `${urlServer}/${version}/${id}`;
-                const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` };
-                const result = await axios.get(urlServer, { headers });
+                const id = message.messages[0][message.messages[0].type]?.id;
+                let mediaUrl = message.messages[0][message.messages[0].type]?.url;
+                
+                if (!mediaUrl) {
+                  let urlServer = this.configService.get<WaBusiness>('WA_BUSINESS').URL;
+                  const version = this.configService.get<WaBusiness>('WA_BUSINESS').VERSION;
+                  urlServer = `${urlServer}/${version}/${id}`;
+                  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` };
+                  const result = await axios.get(urlServer, { headers });
+                  mediaUrl = result.data.url;
+                }
 
-                const buffer = await axios.get(result.data.url, {
+                const buffer = await axios.get(mediaUrl, {
                   headers: { Authorization: `Bearer ${this.token}` }, // Use apenas o token de autorização para download
                   responseType: 'arraybuffer',
                 });
@@ -716,7 +726,7 @@ export class BusinessStartupService extends ChannelStartupService {
         });
 
         const contactRaw: any = {
-          remoteJid: received.contacts[0].profile.phone,
+          remoteJid: key.remoteJid,
           pushName,
           // profilePicUrl: '',
           instanceId: this.instanceId,
@@ -728,7 +738,7 @@ export class BusinessStartupService extends ChannelStartupService {
 
         if (contact) {
           const contactRaw: any = {
-            remoteJid: received.contacts[0].profile.phone,
+            remoteJid: key.remoteJid,
             pushName,
             // profilePicUrl: '',
             instanceId: this.instanceId,
@@ -753,7 +763,7 @@ export class BusinessStartupService extends ChannelStartupService {
 
         this.sendDataWebhook(Events.CONTACTS_UPSERT, contactRaw);
 
-        this.prismaRepository.contact.create({
+        await this.prismaRepository.contact.create({
           data: contactRaw,
         });
       }
