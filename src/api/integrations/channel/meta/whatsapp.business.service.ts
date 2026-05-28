@@ -480,9 +480,9 @@ export class BusinessStartupService extends ChannelStartupService {
                   };
                 }
 
-                const mimetype = result.data?.mime_type || result.headers['content-type'];
+                const mimetype = message.messages[0][mediaType]?.mime_type || buffer.headers['content-type'];
 
-                const contentDisposition = result.headers['content-disposition'];
+                const contentDisposition = buffer.headers['content-disposition'];
                 let fileName = `${message.messages[0].id}.${mimetype.split('/')[1]}`;
                 if (contentDisposition) {
                   const match = contentDisposition.match(/filename="(.+?)"/);
@@ -502,7 +502,9 @@ export class BusinessStartupService extends ChannelStartupService {
                   }
                 }
 
-                const size = result.headers['content-length'] || buffer.data.byteLength;
+                const size = buffer.headers['content-length'] || buffer.data.byteLength;
+
+                messageRaw.message.base64 = buffer.data.toString('base64');
 
                 const fullName = join(`${this.instance.id}`, key.remoteJid, mediaType, fileName);
 
@@ -528,7 +530,6 @@ export class BusinessStartupService extends ChannelStartupService {
                 const mediaUrl = await s3Service.getObjectUrl(fullName);
 
                 messageRaw.message.mediaUrl = mediaUrl;
-                messageRaw.message.base64 = buffer.data.toString('base64');
 
                 // Processar OpenAI speech-to-text para áudio após o mediaUrl estar disponível
                 if (this.configService.get<Openai>('OPENAI').ENABLED && mediaType === 'audio') {
