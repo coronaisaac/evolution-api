@@ -504,13 +504,18 @@ export class BusinessStartupService extends ChannelStartupService {
 
                 const size = buffer.headers['content-length'] || buffer.data.byteLength;
 
-                messageRaw.message.base64 = buffer.data.toString('base64');
-
                 const fullName = join(`${this.instance.id}`, key.remoteJid, mediaType, fileName);
 
-                await s3Service.uploadFile(fullName, buffer.data, size, {
+                const uploadResult = await s3Service.uploadFile(fullName, buffer.data, size, {
                   'Content-Type': mimetype,
                 });
+                
+                if (uploadResult instanceof Error) {
+                  throw uploadResult;
+                }
+
+                const s3MediaUrl = await s3Service.getObjectUrl(fullName);
+                messageRaw.message.mediaUrl = s3MediaUrl;
 
                 const createdMessage = await this.prismaRepository.message.create({
                   data: messageRaw,
@@ -527,9 +532,7 @@ export class BusinessStartupService extends ChannelStartupService {
                   },
                 });
 
-                const s3MediaUrl = await s3Service.getObjectUrl(fullName);
-
-                messageRaw.message.mediaUrl = s3MediaUrl;
+                messageRaw.message.base64 = buffer.data.toString('base64');
 
                 // Processar OpenAI speech-to-text para áudio após o mediaUrl estar disponível
                 if (this.configService.get<Openai>('OPENAI').ENABLED && mediaType === 'audio') {
@@ -565,6 +568,10 @@ export class BusinessStartupService extends ChannelStartupService {
               }
             } catch (error) {
               this.logger.error(['Error on upload file to minio', error?.message, error?.stack]);
+              // Fallback: if S3 fails, attach base64 so it gets saved to DB at line 699
+              if (buffer?.data) {
+                messageRaw.message.base64 = buffer.data.toString('base64');
+              }
             }
           } else {
             try {
