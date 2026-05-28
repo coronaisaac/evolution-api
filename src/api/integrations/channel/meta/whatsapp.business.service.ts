@@ -527,9 +527,9 @@ export class BusinessStartupService extends ChannelStartupService {
                   },
                 });
 
-                const mediaUrl = await s3Service.getObjectUrl(fullName);
+                const s3MediaUrl = await s3Service.getObjectUrl(fullName);
 
-                messageRaw.message.mediaUrl = mediaUrl;
+                messageRaw.message.mediaUrl = s3MediaUrl;
 
                 // Processar OpenAI speech-to-text para áudio após o mediaUrl estar disponível
                 if (this.configService.get<Openai>('OPENAI').ENABLED && mediaType === 'audio') {
