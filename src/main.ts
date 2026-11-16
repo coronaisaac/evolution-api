@@ -5,9 +5,8 @@ import '@utils/instrumentSentry';
 import { ProviderFiles } from '@api/provider/sessions';
 import { PrismaRepository } from '@api/repository/repository.service';
 import { HttpStatus, router } from '@api/routes/index.router';
-import { eventManager, waMonitor } from '@api/server.module';
+import { waMonitor } from '@api/server.module';
 import {
-  Auth,
   configService,
   Cors,
   HttpServer,
@@ -17,14 +16,12 @@ import {
 } from '@config/env.config';
 import { onUnexpectedError } from '@config/error.config';
 import { Logger } from '@config/logger.config';
-import { ROOT_DIR } from '@config/path.config';
 import * as Sentry from '@sentry/node';
 import { ServerUP } from '@utils/server-up';
 import axios from 'axios';
 import compression from 'compression';
 import cors from 'cors';
 import express, { json, NextFunction, Request, Response, urlencoded } from 'express';
-import { join } from 'path';
 
 async function initWA() {
   await waMonitor.loadInstance();
@@ -45,12 +42,17 @@ async function bootstrap() {
   await prismaRepository.onModuleInit();
 
   app.use(
+    (_req, res, next) => {
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.set('X-Frame-Options', 'DENY');
+      res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+      res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+      next();
+    },
     cors({
       origin(requestOrigin, callback) {
         const { ORIGIN } = configService.get<Cors>('CORS');
-        if (ORIGIN.includes('*')) {
-          return callback(null, true);
-        }
+        if (!requestOrigin || ORIGIN.includes('*')) return callback(null, false);
         if (ORIGIN.indexOf(requestOrigin) !== -1) {
           return callback(null, true);
         }
@@ -59,16 +61,17 @@ async function bootstrap() {
       methods: [...configService.get<Cors>('CORS').METHODS],
       credentials: configService.get<Cors>('CORS').CREDENTIALS,
     }),
-    urlencoded({ extended: true, limit: '136mb' }),
-    json({ limit: '136mb' }),
+    urlencoded({ extended: true, limit: '25mb' }),
+    json({
+      limit: '25mb',
+      verify(req, _res, body) {
+        if (req.method === 'POST' && req.url?.split('?')[0] === '/webhook/meta') {
+          (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(body);
+        }
+      },
+    }),
     compression(),
   );
-
-  app.set('view engine', 'hbs');
-  app.set('views', join(ROOT_DIR, 'views'));
-  app.use(express.static(join(ROOT_DIR, 'public')));
-
-  app.use('/store', express.static(join(ROOT_DIR, 'store')));
 
   app.use('/', router);
 
@@ -81,7 +84,6 @@ async function bootstrap() {
           const tzoffset = new Date().getTimezoneOffset() * 60000; //offset in milliseconds
           const localISOTime = new Date(Date.now() - tzoffset).toISOString();
           const now = localISOTime;
-          const globalApiKey = configService.get<Auth>('AUTHENTICATION').API_KEY.KEY;
           const serverUrl = configService.get<HttpServer>('SERVER').URL;
 
           const errorData = {
@@ -95,7 +97,6 @@ async function bootstrap() {
               },
             },
             date_time: now,
-            api_key: globalApiKey,
             server_url: serverUrl,
           };
 
@@ -146,7 +147,11 @@ async function bootstrap() {
     server = ServerUP[httpServer.TYPE];
   }
 
-  eventManager.init(server);
+
+  // Bound slow or stalled HTTP clients. Jobs need separate cancellation.
+  server.headersTimeout = 15_000;
+  server.requestTimeout = 30_000;
+  server.keepAliveTimeout = 5_000;
 
   const sentryConfig = configService.get<SentryConfig>('SENTRY');
   if (sentryConfig.DSN) {

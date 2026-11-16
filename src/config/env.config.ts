@@ -9,7 +9,6 @@ export type HttpServer = {
   PORT: number;
   URL: string;
   DISABLE_DOCS: boolean;
-  DISABLE_MANAGER: boolean;
 };
 
 export type HttpMethods = 'POST' | 'GET' | 'PUT' | 'DELETE';
@@ -357,11 +356,6 @@ export type Metrics = {
   ALLOWED_IPS?: string;
 };
 
-export type Telemetry = {
-  ENABLED: boolean;
-  URL?: string;
-};
-
 export type Proxy = {
   HOST?: string;
   PORT?: string;
@@ -422,7 +416,6 @@ export interface Env {
   S3?: S3;
   AUTHENTICATION: Auth;
   METRICS: Metrics;
-  TELEMETRY: Telemetry;
   PROXY: Proxy;
   AUDIO_CONVERTER: AudioConverter;
   FACEBOOK: Facebook;
@@ -445,6 +438,9 @@ export class ConfigService {
   }
 
   private loadEnv() {
+    if (!process.env.AUTHENTICATION_API_KEY?.trim()) {
+      throw new Error('AUTHENTICATION_API_KEY must be configured');
+    }
     this.env = this.envProcess();
     this.env.PRODUCTION = process.env?.NODE_ENV === 'PROD';
     if (process.env?.DOCKER_ENV === 'true') {
@@ -461,7 +457,6 @@ export class ConfigService {
         PORT: Number.parseInt(process.env.SERVER_PORT) || 8080,
         URL: process.env.SERVER_URL,
         DISABLE_DOCS: process.env?.SERVER_DISABLE_DOCS === 'true',
-        DISABLE_MANAGER: process.env?.SERVER_DISABLE_MANAGER === 'true',
       },
       CORS: {
         ORIGIN: process.env.CORS_ORIGIN?.split(',') || ['*'],
@@ -725,7 +720,7 @@ export class ConfigService {
         },
       },
       WA_BUSINESS: {
-        TOKEN_WEBHOOK: process.env.WA_BUSINESS_TOKEN_WEBHOOK || 'evolution',
+        TOKEN_WEBHOOK: process.env.WA_BUSINESS_TOKEN_WEBHOOK || '',
         URL: process.env.WA_BUSINESS_URL || 'https://graph.facebook.com',
         VERSION: process.env.WA_BUSINESS_VERSION || 'v18.0',
         LANGUAGE: process.env.WA_BUSINESS_LANGUAGE || 'en',
@@ -797,7 +792,7 @@ export class ConfigService {
         },
       },
       CONFIG_SESSION_PHONE: {
-        CLIENT: process.env?.CONFIG_SESSION_PHONE_CLIENT || 'Evolution API',
+        CLIENT: process.env?.CONFIG_SESSION_PHONE_CLIENT || 'Wappi Gateway',
         NAME: process.env?.CONFIG_SESSION_PHONE_NAME || 'Chrome',
       },
       QRCODE: {
@@ -866,7 +861,7 @@ export class ConfigService {
       },
       AUTHENTICATION: {
         API_KEY: {
-          KEY: process.env.AUTHENTICATION_API_KEY || 'BQYHJGJHJ',
+          KEY: process.env.AUTHENTICATION_API_KEY,
         },
         EXPOSE_IN_FETCH_INSTANCES: process.env?.AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES === 'true',
       },
@@ -876,10 +871,6 @@ export class ConfigService {
         USER: process.env?.METRICS_USER,
         PASSWORD: process.env?.METRICS_PASSWORD,
         ALLOWED_IPS: process.env?.METRICS_ALLOWED_IPS,
-      },
-      TELEMETRY: {
-        ENABLED: process.env?.TELEMETRY_ENABLED === undefined || process.env?.TELEMETRY_ENABLED === 'true',
-        URL: process.env?.TELEMETRY_URL,
       },
       PROXY: {
         HOST: process.env?.PROXY_HOST,

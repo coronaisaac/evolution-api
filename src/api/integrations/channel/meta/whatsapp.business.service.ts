@@ -16,15 +16,13 @@ import {
 import * as s3Service from '@api/integrations/storage/s3/libs/minio.server';
 import { ProviderFiles } from '@api/provider/sessions';
 import { PrismaRepository } from '@api/repository/repository.service';
-import { chatbotController } from '@api/server.module';
 import { CacheService } from '@api/services/cache.service';
 import { ChannelStartupService } from '@api/services/channel.service';
 import { Events, wa } from '@api/types/wa.types';
-import { AudioConverter, Chatwoot, ConfigService, Database, Openai, S3, WaBusiness } from '@config/env.config';
+import { AudioConverter, ConfigService, Database, Openai, S3, WaBusiness } from '@config/env.config';
 import { BadRequestException, InternalServerErrorException } from '@exceptions';
 import { createJid } from '@utils/createJid';
 import { status } from '@utils/renderStatus';
-import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
 import { arrayUnique, isURL } from 'class-validator';
 import EventEmitter2 from 'eventemitter2';
@@ -129,7 +127,6 @@ export class BusinessStartupService extends ChannelStartupService {
     const content = data.entry[0].changes[0].value;
 
     try {
-      this.loadChatwoot();
 
       this.eventHandler(content);
 
@@ -388,7 +385,9 @@ export class BusinessStartupService extends ChannelStartupService {
       let messageRaw: any;
       let pushName: any;
 
-      if (received.contacts) pushName = received.contacts[0].profile.name;
+      if (received.contacts && received.contacts[0]?.profile?.name) {
+        pushName = received.contacts[0].profile.name;
+      }
 
       if (received.messages) {
         const message = received.messages[0]; // Añadir esta línea para definir message
@@ -669,13 +668,9 @@ export class BusinessStartupService extends ChannelStartupService {
           // await this.client.readMessages([received.key]);
         }
 
-        this.logger.log(messageRaw);
-
-        sendTelemetry(`received.message.${messageRaw.messageType ?? 'unknown'}`);
-
         this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
 
-        await chatbotController.emit({
+	        await chatbotController.emit({
           instance: { instanceName: this.instance.name, instanceId: this.instanceId },
           remoteJid: messageRaw.key.remoteJid,
           msg: messageRaw,
@@ -696,7 +691,12 @@ export class BusinessStartupService extends ChannelStartupService {
           }
         }
 
-        if (!messageSavedToDb) {
+        if (
+          !messageSavedToDb &&
+          (!this.isMediaMessage(message) ||
+            !this.configService.get<S3>('S3').ENABLE ||
+            message.type === 'sticker')
+        ) {
           const dbData = { ...messageRaw };
           if (dbData.referral) {
             dbData.contextInfo = {
@@ -711,14 +711,12 @@ export class BusinessStartupService extends ChannelStartupService {
           });
         }
 
-        const contact = await this.prismaRepository.contact.findFirst({
-          where: { instanceId: this.instanceId, remoteJid: key.remoteJid },
-        });
+        const rawPhone = received.contacts?.[0]?.profile?.phone || received.contacts?.[0]?.wa_id || key.remoteJid;
+        const targetRemoteJid = createJid(rawPhone);
 
         const contactRaw: any = {
-          remoteJid: received.contacts[0].profile.phone,
+          remoteJid: targetRemoteJid,
           pushName,
-          // profilePicUrl: '',
           instanceId: this.instanceId,
         };
 
@@ -726,26 +724,15 @@ export class BusinessStartupService extends ChannelStartupService {
           return;
         }
 
-        if (contact) {
-          const contactRaw: any = {
-            remoteJid: received.contacts[0].profile.phone,
-            pushName,
-            // profilePicUrl: '',
-            instanceId: this.instanceId,
-          };
+        const contact = await this.prismaRepository.contact.findFirst({
+          where: { instanceId: this.instanceId, remoteJid: targetRemoteJid },
+        });
 
+        if (contact) {
           this.sendDataWebhook(Events.CONTACTS_UPDATE, contactRaw);
 
-          if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
-            await this.chatwootService.eventWhatsapp(
-              Events.CONTACTS_UPDATE,
-              { instanceName: this.instance.name, instanceId: this.instanceId },
-              contactRaw,
-            );
-          }
-
           await this.prismaRepository.contact.updateMany({
-            where: { remoteJid: contact.remoteJid },
+            where: { instanceId: this.instanceId, remoteJid: targetRemoteJid },
             data: contactRaw,
           });
           return;
@@ -753,12 +740,26 @@ export class BusinessStartupService extends ChannelStartupService {
 
         this.sendDataWebhook(Events.CONTACTS_UPSERT, contactRaw);
 
-        this.prismaRepository.contact.create({
-          data: contactRaw,
-        });
+        try {
+          await this.prismaRepository.contact.create({
+            data: contactRaw,
+          });
+        } catch (contactError) {
+          this.logger.warn({
+            local: 'ContactCreateFallback',
+            instanceId: this.instanceId,
+            remoteJid: targetRemoteJid,
+            error: contactError?.message,
+          });
+          await this.prismaRepository.contact.updateMany({
+            where: { instanceId: this.instanceId, remoteJid: targetRemoteJid },
+            data: contactRaw,
+          });
+        }
       }
       if (received.statuses) {
         for await (const item of received.statuses) {
+          const fallbackMessageId = item?.message_id || item?.message?.id || item?.id;
           const key = {
             id: item.id,
             remoteJid: this.phoneNumber,
@@ -768,7 +769,7 @@ export class BusinessStartupService extends ChannelStartupService {
             return;
           }
           if (key.remoteJid !== 'status@broadcast' && !key?.remoteJid?.match(/(:\d+)/)) {
-            const findMessage = await this.prismaRepository.message.findFirst({
+            let findMessage = await this.prismaRepository.message.findFirst({
               where: {
                 instanceId: this.instanceId,
                 key: {
@@ -778,8 +779,27 @@ export class BusinessStartupService extends ChannelStartupService {
               },
             });
 
+            if (!findMessage && fallbackMessageId) {
+              findMessage = await this.prismaRepository.message.findFirst({
+                where: {
+                  instanceId: this.instanceId,
+                  key: {
+                    path: ['id'],
+                    equals: fallbackMessageId,
+                  },
+                },
+              });
+            }
+
             if (!findMessage) {
-              return;
+              this.logger.warn({
+                local: 'MetaStatusLookup',
+                instanceId: this.instanceId,
+                statusId: item.id,
+                fallbackMessageId,
+                payload: received,
+              });
+              continue;
             }
 
             if (item.message === null && item.status === undefined) {
@@ -795,39 +815,61 @@ export class BusinessStartupService extends ChannelStartupService {
                 instanceId: this.instanceId,
               };
 
+              await this.prismaRepository.message.update({
+                where: { id: findMessage.id },
+                data: { status: message.status },
+              });
+
               await this.prismaRepository.messageUpdate.create({
                 data: message,
               });
 
-              if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
-                this.chatwootService.eventWhatsapp(
-                  Events.MESSAGES_DELETE,
-                  { instanceName: this.instance.name, instanceId: this.instanceId },
-                  { key: key },
-                );
-              }
-
-              return;
+              continue;
             }
 
-            const message: any = {
+            const statusUpper = item.status.toUpperCase();
+            const hasError = statusUpper === 'FAILED' || statusUpper === 'ERROR' || !!(item.errors && item.errors.length > 0);
+
+            const messagePayload: any = {
               messageId: findMessage.id,
               keyId: key.id,
               remoteJid: key.remoteJid,
               fromMe: key.fromMe,
               participant: key?.remoteJid,
-              status: item.status.toUpperCase(),
+              status: statusUpper,
               instanceId: this.instanceId,
             };
 
-            this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
+            this.sendDataWebhook(Events.MESSAGES_UPDATE, messagePayload);
 
-            await this.prismaRepository.messageUpdate.create({
-              data: message,
+            // Siempre actualiza el estado principal del mensaje en la tabla Message
+            await this.prismaRepository.message.update({
+              where: { id: findMessage.id },
+              data: { status: statusUpper },
             });
 
+            // Solo registra en MessageUpdate cuando hay un error de entrega
+            if (hasError) {
+              const errorRecord: any = {
+                ...messagePayload,
+                ...(item.errors && item.errors.length > 0 ? { errorPayload: { errors: item.errors } } : {}),
+              };
+
+              this.logger.warn({
+                local: 'MetaMessageError',
+                instanceId: this.instanceId,
+                keyId: key.id,
+                status: statusUpper,
+                errors: item.errors,
+              });
+
+              await this.prismaRepository.messageUpdate.create({
+                data: errorRecord,
+              });
+            }
+
             if (findMessage.webhookUrl) {
-              await axios.post(findMessage.webhookUrl, message);
+              await axios.post(findMessage.webhookUrl, messagePayload);
             }
           }
         }
@@ -909,10 +951,6 @@ export class BusinessStartupService extends ChannelStartupService {
 
   protected async eventHandler(content: any) {
     try {
-      // Registro para depuración
-      this.logger.log('Contenido recibido en eventHandler:');
-      this.logger.log(JSON.stringify(content, null, 2));
-
       const database = this.configService.get<Database>('DATABASE');
       const settings = await this.findSettings();
 
@@ -1157,25 +1195,7 @@ export class BusinessStartupService extends ChannelStartupService {
         source: 'unknown',
       };
 
-      this.logger.log(messageRaw);
-
       this.sendDataWebhook(Events.SEND_MESSAGE, messageRaw);
-
-      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && !isIntegration) {
-        this.chatwootService.eventWhatsapp(
-          Events.SEND_MESSAGE,
-          { instanceName: this.instance.name, instanceId: this.instanceId },
-          messageRaw,
-        );
-      }
-
-      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && isIntegration)
-        await chatbotController.emit({
-          instance: { instanceName: this.instance.name, instanceId: this.instanceId },
-          remoteJid: messageRaw.key.remoteJid,
-          msg: messageRaw,
-          pushName: messageRaw.pushName,
-        });
 
       await this.prismaRepository.message.create({
         data: messageRaw,
