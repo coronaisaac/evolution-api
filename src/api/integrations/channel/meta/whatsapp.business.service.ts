@@ -1,4 +1,5 @@
 import { NumberBusiness } from '@api/dto/chat.dto';
+import { chatbotController } from '@api/server.module';
 import {
   ContactMessage,
   MediaMessage,
@@ -19,7 +20,7 @@ import { PrismaRepository } from '@api/repository/repository.service';
 import { CacheService } from '@api/services/cache.service';
 import { ChannelStartupService } from '@api/services/channel.service';
 import { Events, wa } from '@api/types/wa.types';
-import { AudioConverter, ConfigService, Database, Openai, S3, WaBusiness } from '@config/env.config';
+import { AudioConverter, Chatwoot, ConfigService, Database, Openai, S3, WaBusiness } from '@config/env.config';
 import { BadRequestException, InternalServerErrorException } from '@exceptions';
 import { createJid } from '@utils/createJid';
 import { status } from '@utils/renderStatus';
